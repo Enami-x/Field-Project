@@ -22,6 +22,7 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+
 # ✅ FILE → TEXT EXTRACTION
 def extract_text_from_file(file: UploadFile):
     if file.content_type == "application/pdf":
@@ -46,12 +47,13 @@ def extract_text_from_file(file: UploadFile):
 @app.post("/api/generate")
 async def generate(
     file: UploadFile = File(...),
-    cardCount: int = Form(...)
+    cardCount: int = Form(...),
+    quizCount: int = Form(5)   # ✅ NEW
 ):
     text = extract_text_from_file(file)
 
-    # ✅ strict JSON prompt
-    full_prompt = f"""
+    # ✅ FLASHCARD PROMPT (unchanged — EXACT behavior preserved)
+    flash_prompt = f"""
 You are an expert educational assistant. Your task is to generate flashcards based on the provided text.
 
 REQUIREMENTS:
@@ -72,28 +74,76 @@ TEXT:
 ---
 """
 
-    # ✅ call Gemini
-    response = client.models.generate_content(
+    # ✅ QUIZ PROMPT — SAME AS COLAB FORMAT
+    quiz_prompt = f"""
+You are an expert quiz-maker.
+Analyze the provided text and generate {quizCount} multiple-choice quiz questions.
+
+You MUST:
+- Return a valid JSON list ONLY
+- NO text before/after JSON
+- Each question must contain:
+  • "question"
+  • "options" → list of 4 strings
+  • "answer" → must be ONE of the options
+
+Example:
+[
+  {{
+    "question": "What is the primary function of a CPU?",
+    "options": ["Store data", "Perform calculations", "Render graphics", "Connect to WiFi"],
+    "answer": "Perform calculations"
+  }}
+]
+
+TEXT:
+---
+{text}
+---
+"""
+
+    ### ✅ ---- FLASHCARDS ----
+    response_fc = client.models.generate_content(
         model="models/gemini-2.5-flash",
-        contents=[full_prompt]
+        contents=[flash_prompt]
     )
 
-    raw = response.text
-    print("\n===== RAW GEMINI OUTPUT =====")
-    print(raw)
+    raw_fc = response_fc.text
+    print("\n===== RAW FLASHCARD OUTPUT =====")
+    print(raw_fc)
     print("===== END RAW =====\n")
 
-    # ✅ CLEAN JSON EXTRACTION
-    match = re.search(r"\[.*\]", raw, re.DOTALL)
-    if not match:
-        # return raw so frontend/dev can see
-        return {"error": "No JSON found in model output", "raw": raw}
+    match_fc = re.search(r"\[.*\]", raw_fc, re.DOTALL)
+    if match_fc:
+        try:
+            flashcards = json.loads(match_fc.group(0))
+        except:
+            flashcards = []
+    else:
+        flashcards = []
 
-    json_text = match.group(0)
+    ### ✅ ---- QUIZ ----
+    response_q = client.models.generate_content(
+        model="models/gemini-2.5-flash",
+        contents=[quiz_prompt]
+    )
 
-    try:
-        data = json.loads(json_text)
-    except:
-        return {"error": "JSON parsing failed", "raw": raw}
+    raw_q = response_q.text
+    print("\n===== RAW QUIZ OUTPUT =====")
+    print(raw_q)
+    print("===== END RAW =====\n")
 
-    return data
+    match_q = re.search(r"\[.*\]", raw_q, re.DOTALL)
+    if match_q:
+        try:
+            quiz = json.loads(match_q.group(0))
+        except:
+            quiz = []
+    else:
+        quiz = []
+
+    ### ✅ Return BOTH
+    return {
+        "flashcards": flashcards,
+        "quiz": quiz
+    }
